@@ -5,13 +5,15 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.UnsupportedEncodingException;
-import java.util.Queue;
-import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.LinkedList;
+import java.util.List;
 
 public class ProcessExecutor {
     //======================================================================
     // Fields
     private final String charsetName;
+    private final List<RowHandler> stdoutHandlerList = new LinkedList<>();
+    private final List<RowHandler> stderrHandlerList = new LinkedList<>();
     private Receiver stdout;
     private Receiver stderr;
 
@@ -29,6 +31,20 @@ public class ProcessExecutor {
 
     //======================================================================
     // Methods
+    public void addStdoutHandler(RowHandler handler) {
+        if (null == handler) {
+            throw new NullPointerException("Argument 'handler' must not be null.");
+        }
+        this.stdoutHandlerList.add(handler);
+    }
+
+    public void addStderrHandler(RowHandler handler) {
+        if (null == handler) {
+            throw new NullPointerException("Argument 'handler' must not be null.");
+        }
+        this.stderrHandlerList.add(handler);
+    }
+
     public int execute(String... command) throws Exception {
         final ProcessBuilder builder = new ProcessBuilder(command);
         builder.redirectErrorStream(false);
@@ -36,29 +52,33 @@ public class ProcessExecutor {
         final Process process = builder.start();
 
         this.stdout = new Receiver(process.getInputStream(), this.charsetName);
+        for (RowHandler handler : this.stdoutHandlerList) {
+            this.stdout.addHandler(handler);
+        }
+
         this.stderr = new Receiver(process.getErrorStream(), this.charsetName);
+        for (RowHandler handler : this.stderrHandlerList) {
+            this.stderr.addHandler(handler);
+        }
+
         this.stdout.start();
         this.stderr.start();
 
         return process.waitFor();
     }
 
-    public String readStdout() {
-        return this.stdout.queue.poll();
-    }
-
-    public String readStderr() {
-        return this.stderr.queue.poll();
-    }
-
 
     //======================================================================
     // Inner Classes
+    public interface RowHandler {
+        void handle(String line);
+    }
+
     private static class Receiver extends Thread {
         //======================================================================
         // Fields
-        private final Queue<String> queue = new ConcurrentLinkedQueue<>();
         private final BufferedReader reader;
+        private final List<RowHandler> handlerList = new LinkedList<>();
 
 
         //======================================================================
@@ -78,12 +98,21 @@ public class ProcessExecutor {
 
         //======================================================================
         // Methods
+        private void addHandler(RowHandler handler) {
+            if (null == handler) {
+                throw new NullPointerException("Argument 'handler' must not be null.");
+            }
+            this.handlerList.add(handler);
+        }
+
         @Override
         public void run() {
             try {
                 String line;
                 while (!Thread.interrupted() && null != (line = this.reader.readLine())) {
-                    this.queue.offer(line);
+                    for (RowHandler handler : this.handlerList) {
+                        handler.handle(line);
+                    }
                 }
             } catch (IOException e) {
                 throw new IllegalStateException(e);
